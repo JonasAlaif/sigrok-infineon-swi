@@ -23,3 +23,5 @@ If you downloaded the PulseView AppImage then replace `pulseview` above. The `SI
 Inside PulseView click the add protocol decoder button (rightmost) and select `SWI`. This will add a new channel `SWI`, below `DIN 0 (SWI)` and `DIN 4 (UART)`.
 
 The captured `DIN 0 (SWI)` channel should now be decoded here. Zoom in with scroll to view at different levels. If you need to change the channel being decoded, click on `SWI` and select a different `SWI channel`.
+
+> Note; the captured trace has been included in this repo to save you having to convert it to a sigrok format. If you do not wish for this to be publicly available please let me know.
