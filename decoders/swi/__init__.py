@@ -69,9 +69,9 @@ class Decoder(srd.Decoder):
 
         self.readOdcNumber = 0
 
-        self.phase = 0
         self.pastBits = ""
         self.pastUidData = []
+        self.startUidByte = 0
         self.bitsIdx = 0
         self.enumIdx = 0
 
@@ -101,18 +101,21 @@ class Decoder(srd.Decoder):
             self.put(word[0], word[1], self.out_ann, [4, ["Sel 0", "0"]])
             self.pastBits += "0"
             self.bitsIdx += 1
+            if self.startUidByte == 0:
+                self.startUidByte = word[0]
         elif word[4][8:] == "0101":
             self.put(word[0], word[1], self.out_ann, [4, ["Sel 1", "1"]])
             self.pastBits += "1"
             self.bitsIdx += 1
+            if self.startUidByte == 0:
+                self.startUidByte = word[0]
         else:
             self.put(word[0], word[1], self.out_ann, [3, ["Error", "E"]])
 
         if self.bitsIdx == 8:
             data_parsed = int(self.pastBits, 2)
-            start_of_byte = self.pastWords[-23][0]
-            if self.phase >= 2:
-                start_of_byte = self.pastWords[-7][0]
+            start_of_byte = self.startUidByte
+            self.startUidByte = 0
             self.put(start_of_byte, word[1], self.out_ann, [5, [hex(data_parsed)]])
             self.pastBits = ""
             self.bitsIdx = 0
@@ -149,8 +152,8 @@ class Decoder(srd.Decoder):
                 self.put(word[0], word[1], self.out_ann, [3, ["Packet Class Word Without Header", "E"]])
 
             if bits_parsed == 0:
-                self.phase += 1
                 self.put(word[0], word[1], self.out_ann, [4, ["Packet Class 0", "C0"]])
+                #self.put(word[0], word[1], self.out_ann, [3, ["Packet Class 0", "C0"]])
             elif bits_parsed == 1:
                 self.put(word[0], word[1], self.out_ann, [4, ["Packet Class 1", "C1"]])
             else:
@@ -165,6 +168,10 @@ class Decoder(srd.Decoder):
             self.put(word[0], word[1], self.out_ann, [4, ["Start ECCE"]])
         elif word[4][2:] == "0000010000": # Start ECCE commands
             self.put(word[0], word[1], self.out_ann, [4, ["Start ECCE"]])
+        elif word[4][2:] == "0000000010": # ECCE wrong
+            self.put(word[0], word[1], self.out_ann, [4, ["Wrong!", "W"]])
+        elif word[4][2:] == "0000000011": # ECCE correct
+            self.put(word[0], word[1], self.out_ann, [4, ["Correct!", "C"]])
         else:
             self.put(word[0], word[1], self.out_ann, [3, ["Unimplemented", "E"]])
 
@@ -215,15 +222,32 @@ class Decoder(srd.Decoder):
             self.put(self.pastPackets[-2][0], packet[1], self.out_ann, [5, ["Read: " + hex(packet[4]), "R: " + hex(packet[4])]])
             self.readPacketSeq = 0
             self.readOdcNumber += 1
-            if self.readOdcNumber >= 4:
+            if self.readOdcNumber % 4 == 0:
                 odc_read = (packet[4] << 24) | (self.pastPackets[-5][4] << 16) | (self.pastPackets[-10][4] << 8) | self.pastPackets[-15][4]
-                self.put(self.pastPackets[-19][0], packet[1], self.out_ann, [6, ["ODC: " + hex(odc_read), hex(odc_read)]])
-                self.readOdcNumber = 0
+                #self.put(self.pastPackets[-19][0], packet[1], self.out_ann, [6, ["ODC: " + hex(odc_read), hex(odc_read)]])
+                if self.readOdcNumber <= 48 and self.readOdcNumber % 24 == 0:
+                    odc_full_read = 0 # packet[4] << (23 * 8)
+                    for i in range(23):
+                        temp_val = self.pastPackets[-5-5*i][4]
+                        if i > 2:
+                            odc_full_read = odc_full_read | (temp_val << ((22-i)*8))
+                        elif i == 2:
+                            odc_full_read = odc_full_read | ((temp_val & 7) << ((22-i)*8))
+                    self.put(self.pastPackets[-119][0], packet[1], self.out_ann, [6, ["Sig: " + hex(odc_full_read), hex(odc_full_read)]])
+            elif self.readOdcNumber == (48 + 17):
+                odc_full_read = (packet[4] & 7) << (16*8)
+                for i in range(16):
+                    temp_val = self.pastPackets[-5-5*i][4]
+                    odc_full_read = odc_full_read | (temp_val << ((15-i)*8))
+                self.put(self.pastPackets[-84][0], self.pastPackets[-5][1], self.out_ann, [6, ["Msg: " + hex(odc_full_read), hex(odc_full_read)]])
+            elif self.readOdcNumber == (48 + 18):
+                odc_full_read = (packet[4] << 8) | (self.pastPackets[-5][4] & (~7))
+                self.put(self.pastPackets[-9][0], packet[1], self.out_ann, [6, ["Rnd: " + hex(odc_full_read), hex(odc_full_read)]])
         elif packet[3] == 0x274:
             return
         elif packet[3] == 0x272:
             if self.pastPackets[-1][3] == 0x272 and self.pastPackets[-2][3] == 0x274 and self.pastPackets[-3][3] == 0x272:
-                read_addr = ((self.pastPackets[-1][4] & 0x1f) << 3) | self.pastPackets[-2][4]
+                read_addr = ((self.pastPackets[-1][4] & 0x7f) << 3) | self.pastPackets[-2][4]
                 self.put(self.pastPackets[-3][0], self.pastPackets[-1][0], self.out_ann, [5, ["Request: " + hex(read_addr), "?: " + hex(read_addr)]])
                 self.readPacketSeq = 1
         elif (packet[3] & 0x40 == 0x40 or packet[3] & 0x30 == 0x30 or packet[3] & 0x10 == 0x10) and self.polling == 0:
@@ -236,7 +260,7 @@ class Decoder(srd.Decoder):
 
     def parse_packet_p0(self, packet):
         if self.readOdcNumber != 0:
-            self.put(self.pastPackets[-10][0], self.pastPackets[-1][1], self.out_ann, [6, ["[Ignored]", "[N]"]])
+            #self.put(self.pastPackets[-10][0], self.pastPackets[-1][1], self.out_ann, [6, ["[Ignored]", "[N]"]])
             self.readOdcNumber = 0
 
         if packet[3] == 0x20:
@@ -249,9 +273,9 @@ class Decoder(srd.Decoder):
             uid_value = packet[4]
             self.put(packet[0], packet[1], self.out_ann, [5, ["UID[" + str(uid_idx) + "]: " + hex(uid_value), "U" + str(uid_idx) + ": " + hex(uid_value)]])
             if uid_idx == 9:
-                uid_total_value = uid_value
+                uid_total_value = uid_value << (8*9)
                 for i in range(1,10):
-                    uid_total_value += self.pastPackets[-i][4] << (8*i)
+                    uid_total_value += self.pastPackets[-i][4] << (8*(9-i))
                 self.put(self.pastPackets[-9][0], packet[1], self.out_ann, [6, ["UID: " + hex(uid_total_value)]])
         elif (packet[3] == 0xf or packet[3] == 0x18) and packet[6] == 0: # Unknown polling mechanism, hardiwre
             if packet[3] == 0xf:
@@ -289,7 +313,7 @@ class Decoder(srd.Decoder):
 
     def calculate_bauds(self, sampleN, prevSampleN):
         t = (sampleN - prevSampleN) / self.samplerate
-        bauds = int(round(t / 4.67e-6));
+        bauds = int(round(t / 4.47e-6));
         if bauds % 2 == 0:
             bauds = bauds // 2
             if self.halfRate < 1 and (bauds == 1):
